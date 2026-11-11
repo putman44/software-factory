@@ -11,7 +11,7 @@ type IssueData = ProjectContext["issue"];
 
 export function blockedStatusReport(): string {
   return JSON.stringify({ status: "BLOCKED", contextLimitations:
-    "Selected files are untrusted reference data; no repository checks were performed." }) + "\n";
+    "Selected files are untrusted reference data; the model did not verify repository content." }) + "\n";
 }
 
 function readGithubIssue(number: number, repository: string): IssueData {
@@ -21,10 +21,11 @@ function readGithubIssue(number: number, repository: string): IssueData {
 }
 
 export function parseHandoffArgs(args: readonly string[]) {
-  const usage = "Usage: --issue N --repo owner/repo [--checkout path --preview-context] | [--output path --allow-live-api [--checkout path --context-path file ... | --checkout path --approve-context TOKEN]]";
+  const usage = "Usage: --issue N --repo owner/repo [--checkout path --target-commit SHA --preview-context] | [--output path --allow-live-api [--checkout path --target-commit SHA --context-path file ... | --checkout path --target-commit SHA --approve-context TOKEN]]";
   let issueNumber: string | undefined;
   let repository: string | undefined;
   let checkoutPath: string | undefined;
+  let expectedCommitSha: string | undefined;
   let outputPath: string | undefined;
   let approvalToken: string | undefined;
   let preview = false;
@@ -42,7 +43,7 @@ export function parseHandoffArgs(args: readonly string[]) {
       }
       continue;
     }
-    if (!["--issue", "--repo", "--checkout", "--output", "--approve-context", "--context-path"].includes(option ?? ""))
+    if (!["--issue", "--repo", "--checkout", "--target-commit", "--output", "--approve-context", "--context-path"].includes(option ?? ""))
       throw new Error(`Unknown option: ${option ?? "(missing)"}`);
     const value = args[++i];
     if (!value || value.startsWith("--")) throw new Error(`Missing value for ${option}`);
@@ -50,6 +51,7 @@ export function parseHandoffArgs(args: readonly string[]) {
       case "--issue": if (issueNumber !== undefined) throw new Error("Duplicate --issue"); issueNumber = value; break;
       case "--repo": if (repository !== undefined) throw new Error("Duplicate --repo"); repository = value; break;
       case "--checkout": if (checkoutPath !== undefined) throw new Error("Duplicate --checkout"); checkoutPath = value; break;
+      case "--target-commit": if (expectedCommitSha !== undefined) throw new Error("Duplicate --target-commit"); expectedCommitSha = value; break;
       case "--output": if (outputPath !== undefined) throw new Error("Duplicate --output"); outputPath = value; break;
       case "--approve-context": if (approvalToken !== undefined) throw new Error("Duplicate --approve-context"); approvalToken = value; break;
       case "--context-path": paths.push(value); break;
@@ -58,19 +60,21 @@ export function parseHandoffArgs(args: readonly string[]) {
   if (!issueNumber || !repository) throw new Error(usage);
   if (!Number.isSafeInteger(Number(issueNumber)) || Number(issueNumber) < 1) throw new Error("Select one positive issue number");
   if (preview === live) throw new Error("Choose offline preview or explicit live API authorization");
+  if (Boolean(checkoutPath) !== Boolean(expectedCommitSha) || (expectedCommitSha && !/^[0-9a-f]{40}$/.test(expectedCommitSha)))
+    throw new Error("Context selection requires an exact target commit");
   if (preview && (!checkoutPath || outputPath || approvalToken || paths.length))
     throw new Error("Offline preview requires only --checkout and --preview-context");
   if (live && (!outputPath || Boolean(checkoutPath) !== Boolean(paths.length || approvalToken) ||
       Boolean(paths.length && approvalToken)))
     throw new Error("Live handoff requires output and one valid context selection mode");
-  return { issueNumber: Number(issueNumber), repository, checkoutPath, outputPath, approvalToken, paths, preview };
+  return { issueNumber: Number(issueNumber), repository, checkoutPath, expectedCommitSha, outputPath, approvalToken, paths, preview };
 }
 
 export async function main(args = process.argv.slice(2), dependencies: {
   readIssue?: typeof readGithubIssue;
   send?: typeof fetch;
 } = {}) {
-  const { issueNumber, repository, checkoutPath, outputPath, approvalToken, paths, preview } = parseHandoffArgs(args);
+  const { issueNumber, repository, checkoutPath, expectedCommitSha, outputPath, approvalToken, paths, preview } = parseHandoffArgs(args);
   const readIssue = dependencies.readIssue ?? readGithubIssue;
   const policy = JSON.parse(readFileSync(new URL("../config/factory-policy.json", import.meta.url), "utf8"));
   if (policy?.roles?.planner?.model !== "gpt-6.1-sol" || policy?.roles?.planner?.reasoningEffort !== "medium")
@@ -79,7 +83,7 @@ export async function main(args = process.argv.slice(2), dependencies: {
   if (preview) {
     const issue = readIssue(issueNumber, repository);
     const selection = selectIssueContext({ repository, issueNumber,
-      issue, trustedConfiguration, checkoutPath: checkoutPath! });
+      issue, trustedConfiguration, checkoutPath: checkoutPath!, expectedCommitSha: expectedCommitSha! });
     process.stdout.write(JSON.stringify({ status: "PREVIEW", repository, issueNumber,
       candidates: selection.candidates, approvalToken: selection.approvalToken,
       contextLimitations: selection.limitations }) + "\n");
@@ -88,7 +92,8 @@ export async function main(args = process.argv.slice(2), dependencies: {
   const result = await preparePlannerHandoff(issueNumber, repository, process.env.OPENAI_API_KEY ?? "",
     async (number, selectedRepository) => readIssue(number, selectedRepository), dependencies.send ?? fetch,
     trustedConfiguration,
-    checkoutPath ? approvalToken ? { checkoutPath, approvalToken } : { checkoutPath, paths } : undefined);
+    checkoutPath ? approvalToken ? { checkoutPath, approvalToken, expectedCommitSha: expectedCommitSha! }
+      : { checkoutPath, paths, expectedCommitSha: expectedCommitSha! } : undefined);
   if (result.status === "BLOCKED") {
     process.stdout.write(blockedStatusReport());
     process.exitCode = 1;
@@ -96,7 +101,7 @@ export async function main(args = process.argv.slice(2), dependencies: {
   }
   writeFileSync(outputPath!, JSON.stringify(result.artifact, null, 2) + "\n", { flag: "wx", mode: 0o600 });
   process.stdout.write(JSON.stringify({ status: "READY", artifactPath: outputPath,
-    selectedPaths: result.selectedPaths, contextLimitations: "Selected files are untrusted reference data; no repository checks were performed." }) + "\n");
+    selectedPaths: result.selectedPaths, contextLimitations: "Selected files are untrusted reference data from the verified target commit." }) + "\n");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url))

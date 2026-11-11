@@ -37,8 +37,10 @@ export function loadRepositoryContext(
   checkoutPath: string,
   repository: string,
   paths: readonly string[],
+  expectedCommitSha: string,
 ) {
   RepositorySchema.parse(repository);
+  if (!/^[0-9a-f]{40}$/.test(expectedCommitSha)) throw new Error("Expected target commit is required");
   if (
     !paths.length ||
     paths.length > MAX_FILES ||
@@ -54,8 +56,20 @@ export function loadRepositoryContext(
   if (root !== gitRoot || checkoutRepository(root) !== repository)
     throw new Error("Selected checkout repository mismatch");
 
+  const verifyGitIdentity = (path: string, content?: Buffer) => {
+    const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    if (head !== expectedCommitSha) throw new Error("Selected checkout commit mismatch");
+    const tracked = execFileSync("git", ["-C", root, "--literal-pathspecs", "ls-files", "--stage", "--", path], { encoding: "utf8" });
+    if (!/^100(?:644|755) [0-9a-f]+ 0\t/.test(tracked) || !tracked.endsWith(`\t${path}\n`))
+      throw new Error("Selected source is not a tracked regular file");
+    const dirty = execFileSync("git", ["-C", root, "--literal-pathspecs", "status", "--porcelain", "--untracked-files=all", "--", path], { encoding: "utf8" });
+    if (dirty) throw new Error("Selected source has uncommitted changes");
+    if (content && !execFileSync("git", ["-C", root, "show", `${expectedCommitSha}:${path}`]).equals(content))
+      throw new Error("Selected source differs from expected target commit");
+  };
+
   let total = 0;
-  return paths.map((path) => {
+  const files = paths.map((path) => {
     const parts = path.split("/");
     if (
       isAbsolute(path) ||
@@ -71,6 +85,7 @@ export function loadRepositoryContext(
       )
     )
       throw new Error("Unsafe or unsupported source path");
+    verifyGitIdentity(path);
     let current = root;
     for (const [index, part] of parts.entries()) {
       current = join(current, part);
@@ -104,9 +119,13 @@ export function loadRepositoryContext(
       const content = new TextDecoder("utf-8", { fatal: true }).decode(
         bytes.subarray(0, length),
       );
+      verifyGitIdentity(path, bytes.subarray(0, length));
       return SourceFileSchema.parse({ path, content });
     } finally {
       closeSync(fd);
     }
   });
+  for (const [index, path] of paths.entries())
+    verifyGitIdentity(path, Buffer.from(files[index]!.content));
+  return files;
 }

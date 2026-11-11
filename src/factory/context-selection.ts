@@ -15,6 +15,7 @@ export function selectIssueContext(input: {
   issue: unknown;
   trustedConfiguration: unknown;
   checkoutPath: string;
+  expectedCommitSha: string;
 }) {
   const { issue, issueUrl } = validateProjectContext({ repository: input.repository,
     issueNumber: input.issueNumber, issue: input.issue, trustedConfiguration: input.trustedConfiguration });
@@ -27,7 +28,7 @@ export function selectIssueContext(input: {
     throw new Error("Repeated issue paths require human selection; select context paths manually");
   if (paths.length > 8) throw new Error("Too many source candidates; select context paths manually");
 
-  const files = loadRepositoryContext(input.checkoutPath, input.repository, paths);
+  const files = loadRepositoryContext(input.checkoutPath, input.repository, paths, input.expectedCommitSha);
 
   const root = realpathSync(resolve(input.checkoutPath));
   const tracked = new Set(execFileSync("git", ["-C", root, "--literal-pathspecs", "ls-files", "-z", "--cached", "--", ...paths],
@@ -37,7 +38,8 @@ export function selectIssueContext(input: {
 
   const approvalToken = createHash("sha256").update(JSON.stringify({
     issueUrl, issueBody: issue.body, repository: input.repository,
-    paths, files: files.map((file) => createHash("sha256").update(file.content).digest("hex")),
+    paths, expectedCommitSha: input.expectedCommitSha,
+    files: files.map((file) => createHash("sha256").update(file.content).digest("hex")),
   })).digest("hex");
   return {
     files,

@@ -22,7 +22,25 @@ const trusted = (
 ): TrustedResponseContext => ({
   ...identity,
   expectedRole,
+  ...(expectedRole === "planner" ? { expectedIssueUrl: "https://github.com/putman44/Relay/issues/17" } : {}),
   ...(expectedCommitSha === undefined ? {} : { expectedCommitSha }),
+});
+
+test("planner evidence must name the trusted issue", () => {
+  for (const status of ["READY", "BLOCKED"] as const) {
+    const response = status === "READY" ? plannerReady() : {
+      ...identity, role: "planner" as const, status, reason: "Needs input",
+      recommendedNextAction: "Ask owner", evidenceReferences: [plannerEvidence("requirements-1")],
+    };
+    const wrong = { ...response, evidenceReferences: [{ ...plannerEvidence("requirements-1"),
+      locator: "https://github.com/putman44/Relay/issues/18" }] };
+    const result = validateResponseContext(AgentResponseSchema.parse(wrong), trusted("planner"));
+    assert.equal(result.valid, false);
+    if (!result.valid) assert.match(result.errors.join(" "), /locator does not match trusted issue/);
+  }
+  assert.equal(validateResponseContext(AgentResponseSchema.parse(plannerReady()), {
+    ...identity, expectedRole: "planner",
+  }).valid, false);
 });
 const evidence = (referenceId: string, withCommit = false) => ({
   ...identity,

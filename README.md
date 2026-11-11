@@ -16,6 +16,6 @@ The smoke command typechecks and runs focused tests with in-memory provider stub
 
 ## Planner boundary
 
-The `prepare-planner-handoff.ts` command supports context preview with `--issue N --repo owner/repo --checkout path --preview-context`; it reads the issue using `gh` and inspects the selected local checkout. Preview does not call a model. A live handoff requires `--allow-live-api`, `--output path`, a valid API key, and separate per-request human approval. The direct `run-api-planner.ts` entry point has the same explicit live flag. Neither is part of the offline smoke test or CI.
+The `prepare-planner-handoff.ts` command supports context preview with `--issue N --repo owner/repo --checkout path --target-commit FULL_SHA --preview-context`; it reads the issue using `gh` and verifies selected tracked files against that clean target commit. Preview does not call a model. A live handoff requires `--allow-live-api`, `--output path`, a valid API key, and separate per-request human approval. The direct `run-api-planner.ts` entry point has the same explicit live flag. Neither is part of the offline smoke test or CI.
 
 The output is advisory: `READY` does not grant implementation authority. Consult [AGENTS.md](AGENTS.md) for execution gates and [docs/extraction-map.md](docs/extraction-map.md) for provenance and Relay cleanup steps.

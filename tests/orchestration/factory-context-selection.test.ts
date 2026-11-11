@@ -16,12 +16,14 @@ function fixture(repository: string) {
   const paths = ["src/orchestration/checkpoint-store.ts", "tests/orchestration/checkpoint.test.ts"];
   for (const path of paths) writeFileSync(join(checkoutPath, path), `export const file = '${path}';\n`);
   execFileSync("git", ["-C", checkoutPath, "add", "--", ...paths]);
+  execFileSync("git", ["-C", checkoutPath, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"]);
   return { checkoutPath, paths };
 }
 
 function input(repository: string, checkoutPath: string, body: string) {
   return { repository, issueNumber: 26, issue: { number: 26, title: "Append only records", body },
-    trustedConfiguration: { repository, planner: { model: "gpt-6.1-sol", reasoningEffort: "medium" } }, checkoutPath };
+    trustedConfiguration: { repository, planner: { model: "gpt-6.1-sol", reasoningEffort: "medium" } }, checkoutPath,
+    expectedCommitSha: execFileSync("git", ["-C", checkoutPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim() };
 }
 
 const body = "Check `src/orchestration/checkpoint-store.ts` and `tests/orchestration/checkpoint.test.ts`.";
@@ -44,7 +46,8 @@ test("repeated issue-derived paths cannot create or reuse an approved live selec
     async () => input(repository, checkoutPath, repeated).issue,
     (async () => { calls++; throw new Error("Unexpected model call"); }) as typeof fetch,
     input(repository, checkoutPath, repeated).trustedConfiguration,
-    { checkoutPath, approvalToken: approved.approvalToken }), /Repeated issue paths/);
+    { checkoutPath, approvalToken: approved.approvalToken,
+      expectedCommitSha: input(repository, checkoutPath, repeated).expectedCommitSha }), /Repeated issue paths/);
   assert.equal(calls, 0);
 });
 
@@ -70,7 +73,8 @@ for (const repository of ["putman44/Relay", "putman44/Parsity"]) {
     }) as unknown as typeof fetch;
     const run = (approvalToken: string) => preparePlannerHandoff(26, repository, "fake-key",
       async () => input(repository, checkoutPath, body).issue, send,
-      input(repository, checkoutPath, body).trustedConfiguration, { checkoutPath, approvalToken });
+      input(repository, checkoutPath, body).trustedConfiguration, { checkoutPath, approvalToken,
+        expectedCommitSha: input(repository, checkoutPath, body).expectedCommitSha });
     await assert.rejects(run("wrong"), /Approved context does not match/);
     assert.equal(calls, 0);
     const result = await run(selected.approvalToken);
@@ -79,12 +83,13 @@ for (const repository of ["putman44/Relay", "putman44/Parsity"]) {
     const manual = selectIssueContext(input(repository, checkoutPath, body));
     assert.deepEqual(manual.files, selected.files);
     writeFileSync(join(checkoutPath, paths[0]!), "export const changed = true;\n");
-    await assert.rejects(run(selected.approvalToken), /Approved context does not match/);
+    await assert.rejects(run(selected.approvalToken), /uncommitted changes/);
     assert.equal(calls, 1);
     await assert.rejects(preparePlannerHandoff(26, repository, "fake-key", async () => ({
       ...input(repository, checkoutPath, body).issue, body: body + " More requirements." }), send,
-      input(repository, checkoutPath, body).trustedConfiguration, { checkoutPath, approvalToken: selected.approvalToken }),
-    /Approved context does not match/);
+      input(repository, checkoutPath, body).trustedConfiguration, { checkoutPath,
+        approvalToken: selected.approvalToken, expectedCommitSha: input(repository, checkoutPath, body).expectedCommitSha }),
+    /uncommitted changes/);
     assert.equal(calls, 1);
   });
 }
@@ -100,12 +105,12 @@ test("missing, ambiguous, untracked, excessive and unsafe candidates stop offlin
   assert.throws(() => selectIssueContext(input(repository, checkoutPath, "`src/orchestration/untracked.ts`")));
   symlinkSync(join(checkoutPath, paths[0]!), join(checkoutPath, "src", "orchestration", "linked.ts"));
   execFileSync("git", ["-C", checkoutPath, "add", "--", "src/orchestration/linked.ts"]);
-  assert.throws(() => selectIssueContext(input(repository, checkoutPath, "`src/orchestration/linked.ts`")), /Symlink/);
+  assert.throws(() => selectIssueContext(input(repository, checkoutPath, "`src/orchestration/linked.ts`")), /tracked regular file/);
   writeFileSync(join(checkoutPath, "src", "orchestration", "credential.ts"), "export const x = 1;");
   execFileSync("git", ["-C", checkoutPath, "add", "--", "src/orchestration/credential.ts"]);
   assert.throws(() => selectIssueContext(input(repository, checkoutPath, "`src/orchestration/credential.ts`")), /Unsafe/);
   writeFileSync(join(checkoutPath, paths[0]!), "x".repeat(100_001));
-  assert.throws(() => selectIssueContext(input(repository, checkoutPath, body)), /oversized/);
+  assert.throws(() => selectIssueContext(input(repository, checkoutPath, body)), /uncommitted changes/);
 });
 
 test("untrusted issue cannot change trusted repository or issue identity", () => {

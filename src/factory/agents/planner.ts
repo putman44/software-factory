@@ -189,6 +189,7 @@ export async function runApiPlanner(
     const context = validateResponseContext(parsed.data, {
       ...request.identity,
       expectedRole: "planner",
+      expectedIssueUrl: request.issueUrl,
     });
     report.validation.context = context.valid;
     if (!context.valid) {
