@@ -173,6 +173,7 @@ export type AgentResponse =
 export type TrustedResponseContext = ExecutionIdentity & {
   expectedRole: AgentResponse["role"];
   expectedCommitSha?: string;
+  expectedIssueUrl?: string;
 };
 
 export type ContextValidationResult =
@@ -223,6 +224,10 @@ export function validateResponseContext(
 
   if (response.role === "planner") {
     compareEvidence(response.evidenceReferences);
+    if (!trusted.expectedIssueUrl) errors.push("trusted issue URL is required for planner responses");
+    for (const [index, reference] of response.evidenceReferences.entries())
+      if (reference.locator !== trusted.expectedIssueUrl)
+        errors.push(`evidence[${index}].locator does not match trusted issue`);
   } else if (response.role === "implementer") {
     if (response.status === "COMPLETED") {
       if (

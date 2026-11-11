@@ -14,6 +14,8 @@ function fixture(repository: string) {
   execFileSync("git", ["-C", root, "remote", "add", "origin", `https://github.com/${repository}.git`]);
   mkdirSync(join(root, "src"));
   writeFileSync(join(root, "src", "sample.ts"), "export const sample = 1;\n");
+  execFileSync("git", ["-C", root, "add", "--", "src/sample.ts"]);
+  execFileSync("git", ["-C", root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"]);
   return root;
 }
 
@@ -40,7 +42,9 @@ function request(repository: string, selection?: { checkoutPath: string; paths: 
       output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(response) }] }] }) };
   }) as unknown as typeof fetch;
   const run = () => preparePlannerHandoff(41, repository, "fake-key", async () => issue, send,
-    { repository, planner: { model: "gpt-6.1-sol", reasoningEffort: "medium" } }, selection);
+    { repository, planner: { model: "gpt-6.1-sol", reasoningEffort: "medium" } },
+    selection && { ...selection, expectedCommitSha: execFileSync("git", ["-C", selection.checkoutPath,
+      "rev-parse", "HEAD"], { encoding: "utf8" }).trim() });
   return { run, get calls() { return calls; }, get context() { return context; } };
 }
 
@@ -102,8 +106,30 @@ test("named pipe selection is rejected before a blocking open or model call", as
     return;
   }
   const probe = request("putman44/Relay", { checkoutPath, paths: ["src/pipe.ts"] });
-  await assert.rejects(probe.run(), /Unsupported source file type/);
+  await assert.rejects(probe.run(), /tracked regular file/);
   assert.equal(probe.calls, 0);
+});
+
+test("manual context rejects untracked, dirty, staged, and stale files before provider call", async () => {
+  for (const state of ["untracked", "dirty", "staged", "stale"] as const) {
+    const checkoutPath = fixture("putman44/Relay");
+    const originalCommit = execFileSync("git", ["-C", checkoutPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const path = state === "untracked" ? "src/new.ts" : "src/sample.ts";
+    if (state !== "stale") writeFileSync(join(checkoutPath, path), "export const changed = true;\n");
+    if (state === "staged") execFileSync("git", ["-C", checkoutPath, "add", "--", path]);
+    if (state === "stale") {
+      writeFileSync(join(checkoutPath, path), "export const changed = true;\n");
+      execFileSync("git", ["-C", checkoutPath, "add", "--", path]);
+      execFileSync("git", ["-C", checkoutPath, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "next"]);
+    }
+    let calls = 0;
+    await assert.rejects(preparePlannerHandoff(41, "putman44/Relay", "fake-key", async () => issue,
+      (async () => { calls++; throw new Error("Unexpected provider call"); }) as typeof fetch,
+      { repository: "putman44/Relay", planner: { model: "gpt-6.1-sol", reasoningEffort: "medium" } },
+      { checkoutPath, paths: [path], expectedCommitSha: originalCommit }),
+    state === "stale" ? /commit mismatch/ : state === "untracked" ? /tracked regular file/ : /uncommitted changes/);
+    assert.equal(calls, 0);
+  }
 });
 
 test("no selection preserves the original request", async () => {

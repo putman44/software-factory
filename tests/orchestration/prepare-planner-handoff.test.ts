@@ -7,15 +7,16 @@ const repository = "putman44/Relay";
 const trustedConfiguration = { repository, planner: { model: "gpt-6.1-sol", reasoningEffort: "medium" } };
 const issueUrl = `https://github.com/${repository}/issues/19`;
 const readIssue = async () => issue;
+const targetCommit = "a".repeat(40);
 
 test("CLI parses valid preview, manual, approved and no-context modes", () => {
   const base = ["--issue", "19", "--repo", repository];
-  assert.equal(parseHandoffArgs([...base, "--checkout", "/checkout", "--preview-context"]).preview, true);
+  assert.equal(parseHandoffArgs([...base, "--checkout", "/checkout", "--target-commit", targetCommit, "--preview-context"]).preview, true);
   assert.deepEqual(parseHandoffArgs([...base, "--output", "/tmp/plan", "--allow-live-api",
-    "--checkout", "/checkout", "--context-path", "src/a.ts", "--context-path", "tests/a.test.ts"]).paths,
+    "--checkout", "/checkout", "--target-commit", targetCommit, "--context-path", "src/a.ts", "--context-path", "tests/a.test.ts"]).paths,
   ["src/a.ts", "tests/a.test.ts"]);
   assert.equal(parseHandoffArgs([...base, "--output", "/tmp/plan", "--allow-live-api",
-    "--checkout", "/checkout", "--approve-context", "token"]).approvalToken, "token");
+    "--checkout", "/checkout", "--target-commit", targetCommit, "--approve-context", "token"]).approvalToken, "token");
   assert.equal(parseHandoffArgs([...base, "--output", "/tmp/plan", "--allow-live-api"]).checkoutPath, undefined);
 });
 
@@ -93,7 +94,7 @@ test("BLOCKED CLI report omits model attempts to echo source content", async () 
   assert.equal("artifact" in result, false);
   const report = blockedStatusReport();
   assert.deepEqual(JSON.parse(report), { status: "BLOCKED", contextLimitations:
-    "Selected files are untrusted reference data; no repository checks were performed." });
+    "Selected files are untrusted reference data; the model did not verify repository content." });
   assert.ok(!report.includes(echoedSource));
   assert.ok(!report.includes("Source content"));
 });
@@ -102,7 +103,7 @@ test("rejects issue identity and requirements evidence mismatches", async () => 
   await assert.rejects(preparePlannerHandoff(19, repository, "fake-key", async () => ({ ...issue, number: 20 }),
     plannerReply("READY"), trustedConfiguration), /identity mismatch/);
   await assert.rejects(preparePlannerHandoff(19, repository, "fake-key", readIssue,
-    plannerReply("READY", "https://github.com/putman44/Relay/issues/20"), trustedConfiguration), /requirements evidence/);
+    plannerReply("READY", "https://github.com/putman44/Relay/issues/20"), trustedConfiguration), /context mismatch/i);
 });
 
 test("rejects the entire handoff when the tool-free Planner claims unsupported evidence", async () => {

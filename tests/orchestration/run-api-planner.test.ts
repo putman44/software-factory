@@ -53,6 +53,21 @@ test("fails context mismatch including evidence identity", async () => {
   assert.equal(result.result, "FAIL");
 });
 
+test("direct Planner rejects evidence for another issue", async () => {
+  for (const status of ["READY", "BLOCKED"] as const) {
+    const planned = status === "BLOCKED" ? output : { ...identity, role: "planner", status,
+      plan: { summary: "Scoped", tasks: [{ taskId: "one", summary: "Edit", dependencies: [],
+        fileScope: ["src/example.ts"], complexity: "LOW", risk: "LOW", verificationRequirements: ["Test"] }] },
+      evidenceReferences: output.evidenceReferences };
+    const wrong = { ...planned, evidenceReferences: [{ ...output.evidenceReferences[0],
+      locator: "https://github.com/example/repo/issues/2" }] };
+    const result = await runApiPlanner(input, "test-key", api(response(JSON.stringify(wrong))) as typeof fetch);
+    assert.equal(result.result, "FAIL");
+    assert.equal(result.validation.context, false);
+    assert.match(result.validation.errors.join(" "), /locator does not match trusted issue/);
+  }
+});
+
 test("reports API failure", async () => {
   const result = await runApiPlanner(input, "test-key", api({}, 503) as typeof fetch);
   assert.deepEqual(result.errors, ["OpenAI HTTP 503"]);

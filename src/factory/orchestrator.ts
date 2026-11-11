@@ -12,7 +12,7 @@ export async function preparePlannerHandoff(
   readIssue: (number: number, repository: string) => Promise<unknown>,
   send: typeof fetch,
   trustedConfiguration: unknown,
-  sourceSelection?: { checkoutPath: string; paths: readonly string[] } | { checkoutPath: string; approvalToken: string },
+  sourceSelection?: { checkoutPath: string; paths: readonly string[]; expectedCommitSha: string } | { checkoutPath: string; approvalToken: string; expectedCommitSha: string },
 ) {
   if (!Number.isSafeInteger(selectedNumber) || selectedNumber < 1) throw new Error("Select one positive issue number");
   RepositorySchema.parse(repository);
@@ -32,13 +32,14 @@ export async function preparePlannerHandoff(
   const repositoryContext = sourceSelection && "approvalToken" in sourceSelection
     ? (() => {
       const selection = selectIssueContext({ repository, issueNumber: selectedNumber, issue,
-        trustedConfiguration: configuration, checkoutPath: sourceSelection.checkoutPath });
+        trustedConfiguration: configuration, checkoutPath: sourceSelection.checkoutPath,
+        expectedCommitSha: sourceSelection.expectedCommitSha });
       if (selection.approvalToken !== sourceSelection.approvalToken)
         throw new Error("Approved context does not match current issue or files; preview again");
       return selection.files;
     })()
     : sourceSelection
-      ? loadRepositoryContext(sourceSelection.checkoutPath, repository, sourceSelection.paths) : undefined;
+      ? loadRepositoryContext(sourceSelection.checkoutPath, repository, sourceSelection.paths, sourceSelection.expectedCommitSha) : undefined;
   const report = await runApiPlanner({ issueBody: issue.body, issueUrl, identity,
     ...(repositoryContext ? { repositoryContext } : {}) }, apiKey, send);
   if (report.result !== "PASS") throw new Error(`Planner failed validation: ${report.errors.join("; ")}`);
