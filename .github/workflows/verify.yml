@@ -1,0 +1,21 @@
+name: Verify
+on:
+  pull_request:
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run smoke:offline
+      - run: git diff --check "${{ github.event.pull_request.base.sha }}"...HEAD
+      - run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
